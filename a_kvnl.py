@@ -1,5 +1,5 @@
 __all__ = (
-    'AnnotationError',
+    'DecodingError', 'EncodingError',
     'DECODERS', 'ENCODERS', 'TYPES',
     'decode_line', 'encode_line',
     'decode_block', 'encode_block',
@@ -9,7 +9,11 @@ __all__ = (
 from datetime import datetime
 
 
-class AnnotationError(Exception):
+class DecodingError(Exception):
+    pass
+
+
+class EncodingError(Exception):
     pass
 
 
@@ -39,24 +43,38 @@ TYPES = {
 }
 
 
-def decode_line(stream, decoders=DECODERS):
+def raise_decoding_error(annotation, value):
+    raise DecodingError(f'unrecognized annotation: {annotation}')
+
+
+def ensure_encoded(annotation, value):
+    if not isinstance(value, bytes):
+        raise EncodingError(f'{value=} with {annotation=} is not encoded as bytes')
+    return value
+
+
+def decode_line(stream, decoders=DECODERS, default=raise_decoding_error):
     r'''decode a line
 
     Arguments:
     stream: a generator compatible with kvnl.load_line()
     decoders: a dict of ways to decode data based on its annotation
-        or None to disable decoding (inspect DECODERS for format)
+        - if None, disable decoding and return a (annotation, raw_value)-tuple
+          for the value
+        - if {}, let default handle everything
+    default: a function which takes the annotation and raw value as inputs
+        and returns something suitable:
+        - default: raise_decoding_error raises an error
+        - None: create an (annotation, raw_value)-tuple
 
     Yields:
     None while stream yields None
     '\n' if stream yields '\n' and returns
-    (key, value) if there was no annotation and returns
-    ((key, annotation), value) if there was an annotation and decoders is None
-    (key, decoded_value) if decoding succeeded
+    (key, value) where value depends on decoders and default arguments
 
     Raises:
-    AnnotationError if decoders is not None and the annotation is not in decoders
-    various errors depending on decoders
+    EOFError if data runs out before a valid line is reached
+    various errors depending on decoders and default
 
     Expected behavior:
 
@@ -72,7 +90,17 @@ def decode_line(stream, decoders=DECODERS):
 
     Decoding disabled:
     >>> next(decode_line([('x!I', b'1')], None))
-    (('x', 'I'), b'1')
+    ('x', ('I', b'1'))
+    >>> next(decode_line([ ('x!I', b'1') ], {}, None))
+    ('x', ('I', b'1'))
+
+    Decoding forced to default:
+    >>> try: next(decode_line([ ('x!I', b'1') ], {}))
+    ... except DecodingError: 'DecodingError'
+    ...
+    'DecodingError'
+    >>> next(decode_line([ ('x!complex', b'1+2j') ], {}, lambda a, v: eval(f'{a}({v.decode()})')))
+    ('x', (1+2j))
 
     Nonblocking I/O:
     >>> list(decode_line([None, None, ('x', b'1')]))
@@ -103,7 +131,7 @@ def decode_line(stream, decoders=DECODERS):
         key, annotation = key.split('!', maxsplit=1)
 
         if decoders is None:
-            yield (key, annotation), value
+            yield key, (annotation, value)
             return
 
         for annotations, decode in decoders.items():
@@ -111,20 +139,26 @@ def decode_line(stream, decoders=DECODERS):
                 yield key, decode(value)
                 return
 
-        raise AnnotationError(f'unrecognized annotation: {annotation}')
+        if default is not None:
+            yield key, default(annotation, value)
+            return
+
+        yield key, (annotation, value)
+        return
+
     raise EOFError
 
 
-def encode_line(key_and_value, encoders=ENCODERS, types=TYPES):
+def encode_line(key_and_value, encoders=ENCODERS, default=ensure_encoded, types=TYPES):
     r'''encode a line
 
     Arguments:
     key_and_value: the key and value, which can be:
          - None or '\n', passed on unchanged
-         - (key, value) tuple, where key can be:
-            - (key, annotation) tuple for an explicit annotation
-            - (key, None) tuple to infer annotation from the type of value
-            - key alone, which the same as (key, None)
+         - (key, value) tuple, where value can be:
+            - (annotation, value) tuple for an explicit annotation
+            - (None, value) tuple to infer annotation from the type of value
+            - value alone, which the same as above (unless value is a tuple)
     encoders: dict of rules for encoding values
     types: dict of types and their corresponing annotations
 
@@ -156,7 +190,7 @@ def encode_line(key_and_value, encoders=ENCODERS, types=TYPES):
     ('x!T', b'1234-01-02T00:00:00')
 
     Explicit annotation:
-    >>> encode_line((('x', 'F'), 1))
+    >>> encode_line(('x', ('F', 1)))
     ('x!F', b'1.0')
 
     No annotation:
@@ -164,8 +198,12 @@ def encode_line(key_and_value, encoders=ENCODERS, types=TYPES):
     ('x', b'data')
 
     Disabled encoding:
-    >>> encode_line((('x', 'F'), b'1e0'), encoders=None)
+    >>> encode_line(('x', ('F', b'1e0')), encoders=None)
     ('x!F', b'1e0')
+
+    Custom encoding:
+    >>> encode_line(('', 1+2j), {}, lambda a, v: str(v).encode())
+    ('', b'(1+2j)')
     '''
     if key_and_value in (None, '\n'):
         return key_and_value
@@ -178,8 +216,8 @@ def encode_line(key_and_value, encoders=ENCODERS, types=TYPES):
 
     key, value = key_and_value
 
-    if isinstance(key, tuple):
-        key, annotation = key
+    if isinstance(value, tuple):
+        annotation, value = value
     else:
         annotation = None
 
@@ -194,16 +232,17 @@ def encode_line(key_and_value, encoders=ENCODERS, types=TYPES):
             value = encode(value)
             break
 
+    value = default(annotation, value)
+
+    ensure_encoded(annotation, value)
+
     if annotation is not None:
         key = f'{key}!{annotation}'
-
-    if not isinstance(value, bytes):
-        raise AnnotationError(f'value must already be bytes')
 
     return key, value
 
 
-def decode_block(stream, decoders=DECODERS):
+def decode_block(stream, decoders=DECODERS, default=raise_decoding_error):
     r'''decode a block of lines'''
     try:
         while True:
@@ -212,7 +251,12 @@ def decode_block(stream, decoders=DECODERS):
         pass
 
 
-def encode_block(lines, encoders=ENCODERS, types=TYPES):
+def encode_block(lines, encoders=ENCODERS, default=ensure_encoded, types=TYPES):
     r'''encode a block of lines'''
     for line in lines:
-        yield encode_line(line, encoders, types)
+        yield encode_line(line, encoders, default, types)
+
+
+if __name__ == '__main__':
+    from doctest import testmod
+    testmod()

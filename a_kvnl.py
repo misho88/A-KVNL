@@ -17,7 +17,29 @@ class EncodingError(Exception):
     pass
 
 
+def cast_bool(v):
+    if v.lower() in (b'false', b'f', b'no', b'n'):
+        return False
+    if v.lower() in (b'true', b't', b'yes', b'y'):
+        return True
+    try:
+        i = int(v)
+    except ValueError:
+        pass
+    else:
+        if i in (0, 1):
+            return bool(i)
+    raise DecodingError(f'could not interpret {repr(v)} as a Bool')
+
+
+def ensure_type(v, t):
+    if not isinstance(v, t):
+        raise EncodingError(f'{repr(v)} is not of type {t}')
+    return v
+
+
 DECODERS = {
+    ('Bool', 'B'): lambda v: cast_bool(v),
     ('Int', 'I'): lambda v: int(v),
     ('Float', 'F'): lambda v: float(v),
     ('Unicode', 'U'): lambda v: v.decode('utf-8'),
@@ -27,8 +49,9 @@ DECODERS = {
 
 
 ENCODERS = {
-    ('Int', 'I'): lambda v: str(int(v)).encode(),
-    ('Float', 'F'): lambda v: str(float(v)).encode(),
+    ('Bool', 'B'): lambda v: str(ensure_type(v, bool)).encode(),
+    ('Int', 'I'): lambda v: str(int(str(v))).encode(),
+    ('Float', 'F'): lambda v: str(float(str(v))).encode(),
     ('Unicode', 'U'): lambda v: v.encode('utf-8'),
     ('ASCII', 'A'): lambda v: v.encode('ascii'),
     ('Time', 'T'): lambda v: v.isoformat().encode()
@@ -36,6 +59,7 @@ ENCODERS = {
 
 
 TYPES = {
+    bool: 'B',
     int: 'I',
     float: 'F',
     str: 'U',
@@ -107,6 +131,12 @@ def decode_line(stream, decoders=DECODERS, default=raise_decoding_error):
     [None, None, ('x', b'1')]
 
     Types:
+    >>> next(decode_line([('x!Bool', b'yes')]))
+    ('x', True)
+    >>> next(decode_line([('x!Bool', b'f')]))
+    ('x', False)
+    >>> next(decode_line([('x!Bool', b'1')]))
+    ('x', True)
     >>> next(decode_line([('x!Float', b'3.14')]))
     ('x', 3.14)
     >>> next(decode_line([('x!Unicode', b'\xcf\x80')]))

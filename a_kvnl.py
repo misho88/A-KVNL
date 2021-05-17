@@ -2,7 +2,7 @@ __all__ = (
     'DecodingError', 'EncodingError',
     'DECODERS', 'ENCODERS', 'TYPES',
     'decode_line', 'encode_line',
-    'decode_block', 'encode_block',
+    'decode', 'encode',
 )
 
 
@@ -242,7 +242,7 @@ def encode_line(key_and_value, encoders=ENCODERS, default=ensure_encoded, types=
     return key, value
 
 
-def decode_block(stream, decoders=DECODERS, default=raise_decoding_error):
+def decode(stream, decoders=DECODERS, default=raise_decoding_error):
     r'''decode a block of lines'''
     try:
         while True:
@@ -251,7 +251,7 @@ def decode_block(stream, decoders=DECODERS, default=raise_decoding_error):
         pass
 
 
-def encode_block(lines, encoders=ENCODERS, default=ensure_encoded, types=TYPES):
+def encode(lines, encoders=ENCODERS, default=ensure_encoded, types=TYPES):
     r'''encode a block of lines'''
     for line in lines:
         yield encode_line(line, encoders, default, types)

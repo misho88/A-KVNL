@@ -246,7 +246,7 @@ def decode(stream, decoders=DECODERS, default=raise_decoding_error):
     r'''decode a block of lines'''
     try:
         while True:
-            yield from decode_line(stream, decoders)
+            yield from decode_line(stream, decoders, default)
     except EOFError:
         pass
 

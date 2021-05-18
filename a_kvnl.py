@@ -1,6 +1,6 @@
 __all__ = (
     'DecodingError', 'EncodingError',
-    'DECODERS', 'ENCODERS', 'TYPES',
+    'DECODERS', 'EXPLICIT_DECODERS', 'ENCODERS', 'TYPES',
     'decode_line', 'encode_line',
     'decode', 'encode',
 )
@@ -15,6 +15,18 @@ class DecodingError(Exception):
 
 class EncodingError(Exception):
     pass
+
+
+class AnnotatedValue:
+    def __init__(self, annotation, value):
+        self.annotation, self.value = annotation, value
+
+    def __iter__(self):
+        yield self.annotation
+        yield self.value
+
+    def __repr__(self):
+        return f'{type(self).__name__}({repr(self.annotation)}, {repr(self.value)})'
 
 
 def cast_bool(v):
@@ -45,6 +57,18 @@ DECODERS = {
     ('Unicode', 'U'): lambda v: v.decode('utf-8'),
     ('ASCII', 'A'): lambda v: v.decode('ascii'),
     ('Time', 'T'): lambda v: datetime.fromisoformat(v.decode())
+}
+
+
+def explicit(key, decode):
+    def explicit_decode(v):
+        return AnnotatedValue(key[1], decode(v))
+    return explicit_decode
+
+
+EXPLICIT_DECODERS = {
+    key: explicit(key, value)
+    for key, value in DECODERS.items()
 }
 
 
@@ -114,9 +138,9 @@ def decode_line(stream, decoders=DECODERS, default=raise_decoding_error):
 
     Decoding disabled:
     >>> next(decode_line([('x!I', b'1')], None))
-    ('x', ('I', b'1'))
+    ('x', AnnotatedValue('I', b'1'))
     >>> next(decode_line([ ('x!I', b'1') ], {}, None))
-    ('x', ('I', b'1'))
+    ('x', AnnotatedValue('I', b'1'))
 
     Decoding forced to default:
     >>> try: next(decode_line([ ('x!I', b'1') ], {}))
@@ -145,6 +169,16 @@ def decode_line(stream, decoders=DECODERS, default=raise_decoding_error):
     ('x', 'pi')
     >>> next(decode_line([('!T', b'1234-01-02T04:05:06.789-05:00')]))
     ('', datetime.datetime(1234, 1, 2, 4, 5, 6, 789000, tzinfo=datetime.timezone(datetime.timedelta(days=-1, seconds=68400))))
+
+    Explicit vs Implicit vs No decoding:
+    >>> next(decode_line([('x!F', b'3.14')], decoders=DECODERS))
+    ('x', 3.14)
+    >>> next(decode_line([('x!F', b'3.14')], decoders=EXPLICIT_DECODERS))
+    ('x', AnnotatedValue('F', 3.14))
+    >>> next(decode_line([('x!F', b'3.14')], decoders=None))
+    ('x', AnnotatedValue('F', b'3.14'))
+    >>> next(decode_line([('x!unknown', b'3.14')], default=None))
+    ('x', AnnotatedValue('unknown', b'3.14'))
     '''
     for line in stream:
         if line is None:
@@ -161,7 +195,7 @@ def decode_line(stream, decoders=DECODERS, default=raise_decoding_error):
         key, annotation = key.split('!', maxsplit=1)
 
         if decoders is None:
-            yield key, (annotation, value)
+            yield key, AnnotatedValue(annotation, value)
             return
 
         for annotations, decode in decoders.items():
@@ -173,7 +207,7 @@ def decode_line(stream, decoders=DECODERS, default=raise_decoding_error):
             yield key, default(annotation, value)
             return
 
-        yield key, (annotation, value)
+        yield key, AnnotatedValue(annotation, value)
         return
 
     raise EOFError
@@ -222,6 +256,11 @@ def encode_line(key_and_value, encoders=ENCODERS, default=ensure_encoded, types=
     Explicit annotation:
     >>> encode_line(('x', ('F', 1)))
     ('x!F', b'1.0')
+    >>> encode_line(('x', AnnotatedValue('F', 1)))
+    ('x!F', b'1.0')
+    >>> class v: annotation, value = 'F', 1
+    >>> encode_line(('x', v))
+    ('x!F', b'1.0')
 
     No annotation:
     >>> encode_line(('x', b'data'))
@@ -246,10 +285,12 @@ def encode_line(key_and_value, encoders=ENCODERS, default=ensure_encoded, types=
 
     key, value = key_and_value
 
-    if isinstance(value, tuple):
+
+    if isinstance(value, (tuple, AnnotatedValue)):
         annotation, value = value
     else:
-        annotation = None
+        annotation = getattr(value, 'annotation', None)
+        value = getattr(value, 'value', value)
 
     if annotation is None:
         for t, a in types.items():

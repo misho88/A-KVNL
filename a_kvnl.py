@@ -1,5 +1,6 @@
 __all__ = (
     'DecodingError', 'EncodingError',
+    'AnnotatedValue',
     'DECODERS', 'EXPLICIT_DECODERS', 'ENCODERS', 'TYPES',
     'decode_line', 'encode_line',
     'decode', 'encode',
@@ -203,11 +204,10 @@ def decode_line(stream, decoders=DECODERS, default=raise_decoding_error):
                 yield key, decode(value)
                 return
 
-        if default is not None:
-            yield key, default(annotation, value)
-            return
+        if default is None:
+            default = AnnotatedValue
 
-        yield key, AnnotatedValue(annotation, value)
+        yield key, default(annotation, value)
         return
 
     raise EOFError
